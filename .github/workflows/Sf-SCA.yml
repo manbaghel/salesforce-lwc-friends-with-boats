@@ -1,0 +1,57 @@
+# Unique name for this workflow
+name: Salesforce Static Code Analysis
+
+# Definition when the workflow should run
+on:
+  push:
+    branches:
+      - main
+      - development
+
+# Jobs to be executed
+jobs:
+  static-code-analysis:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+          fetch-depth: 0
+
+# Store secret for QA Org
+    - name: 'Populate auth file with SFDX_URL secret of the UAT'
+      shell: bash
+      run: |
+          echo ${{ secrets.QA_INSTANCE_URL}} > ./QA_INSTANCE_URL.txt
+
+    - name: 'Create delta packages for new, modified or deleted metadata'
+      run: | 
+          mkdir changed-sources
+          sfdx sgd:source:delta --to "HEAD" --from "HEAD^" --output changed-sources/ --generate-delta --source force-app/
+
+ # Authenticate to org
+    - name: 'Authenticate to QA Org'
+      run: sfdx auth:sfdxurl:store -f ./QA_INSTANCE_URL.txt -s -a dev
+
+    - name: 'Validate delta changes from QA branch in QA org'
+      run: |
+          if [ -d changed-sources/force-app ]; then
+          sfdx force:source:deploy -p "changed-sources/force-app" --checkonly --testlevel RunLocalTests
+          fi
+      
+    - name: Install PMD
+      run: |
+        wget https://github.com/pmd/pmd/releases/download/pmd_releases%2F6.50.0/pmd-bin-6.50.0.zip
+        unzip pmd-bin-6.50.0.zip
+        export PATH=$PATH:pmd-bin-6.50.0/bin/
+
+    - name: Run PMD static code analysis
+      run: |
+        pmd-bin-6.50.0/bin/run.sh pmd -d changed-sources/force-app -f xml -R rulesets/apex.xml -l apex -r pmd-report.xml
+
+    - name: Upload PMD report
+      uses: actions/upload-artifact@v2
+      with:
+        name: pmd-report
+        path: pmd-report.xml
